@@ -1,0 +1,116 @@
+# Again, you can change this from a version that works to one that
+# may not... if you a freak. Are you enough of a freak to do that?
+# Only you can answer that.
+version: '3.1'
+
+services:
+  # This is how we're getting on the Fediverse. Pleroma is light enough,
+  # stable enough, and it works with Mastodon's APIs.
+  pleroma:
+    # This is the offical image.
+    image: git.pleroma.social:5050/pleroma/pleroma:latest
+    container_name: "pleroma"
+    hostname: "pleroma"
+    labels:
+      # This way, if you don't label your containers with descriptive
+      # names, you can at least read the labels of them.
+      # Note: LABEL YOUR CONTAINERS WITH DESCRIPTIVE NAMES.
+      - "org.label-schema.group=pleroma"
+    # We must post. ABC: Always, be postin'.  
+    restart: always
+    # This is where you will set your basic environment variables. It
+    # loads these first, which will then be overridden by anything in config.exs,
+    # which gets overwritten by anythign in the admin DB.
+    env_file: /dkr/pleroma/environments/pleroma/pleroma.env
+    # It won't work without this bad boy
+    depends_on:
+      - pleroma-db
+    # By default, Pleroma listens on 4000. You can change that in the environment
+    # file. Regardless, you will need to have the host port open on your box. 
+    ports:
+      - "4000:4000"
+    # We have both internal communication with the DB, and external communications with
+    # the web, so we're on both networks.  
+    networks:
+      - webstuff-external
+      - pleroma-internal
+    # The config.exs file loads instance specific information, uploads is where any media
+    # attachments will reside, and static will be where you stick things like your Terms 
+    # of Service, emojis, etc. You will need read on all and write permissions for uploads. 
+    # These need to be part of any backup plan you have in place.
+    volumes:
+      - /DirectoryOnTheHostMachinepleroma/config.exs:/var/lib/pleroma/config.exs
+      - /DirectoryOnTheHostMachinepleroma/uploads:/var/lib/pleroma/uploads
+      - /DirectoryOnTheHostMachinepleroma/static:/var/lib/pleroma/static
+
+  # This is where all of your precious posts live.
+  pleroma-db:
+    # You can use any flavor of postgres after 9, but I strongly recommend to go for the
+    # latest and greatest, as it has some performance improvements.
+    image: postgres:15.1
+    container_name: "pleroma-db"
+    hostname: "pleroma-db"
+    # We're grouping it with the web app, and we don't want docker to upgrade our
+    # DB without us explicitly telling it to, so if you ever turn on Watchtower elsewhere,
+    # this will protect you. Probably.
+    labels:
+      - "com.centurylinklabs.watchtower.enable=False"
+      - "org.label-schema.group=pleroma"
+    # If we stop posting, we die.
+    restart: always
+    # Again, we're configuring our environment variables externally.
+    env_file: /DirectoryOnTheHostMachinepleroma/pleroma/environments/pleroma-db/postgres.env
+    # There is no reason to ever point this at the outside world directly.
+    networks:
+      - pleroma-internal
+    # Postgres is a little needy, I suggest not touching this if possible.  
+    ports:
+      - "127.0.0.1:5432:5432"
+    # This is where the Postgres database lives on your box. Back these up whenever possible,
+    # or your posts... like tears in the rain. 
+    volumes:
+      - /DirectoryOnTheHostMachinepleroma/pleroma/pleroma-db/pgdata:/var/lib/postgresql/data
+      - /DirectoryOnTheHostMachinepleroma/pleroma/pleroma-db/pginit:/docker-entrypoint-initdb.d
+      # This is to create a location on the host machine you can run a pg_dump to from inside
+      # the container.
+      - /DirectoryOnTheHostMachinepleroma/pleroma/pleroma-db/backups:/var/lib/postgresql/backups
+
+# This is our easy selazy way of getting an S3 bucket connected
+# to our Pleroma instance
+  pleroma-s3fs:
+    container_name: pleroma-s3fs
+    image: efrecon/s3fs:1.91
+    restart: unless-stopped
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - 'apparmor:unconfined'
+    devices:
+      - /dev/fuse
+    volumes:
+      - '/dkr/pleroma/uploads:/opt/s3fs/bucket:rshared'
+    labels:
+      - "org.label-schema.group=pleroma"
+    environment:
+      AWS_S3_BUCKET: 'YourBucketName'
+      # These will be created progamatically by your IAM user
+      AWS_S3_ACCESS_KEY_ID: 'YourAccessKey'
+      AWS_S3_SECRET_ACCESS_KEY: 'YourSecretAccessKey'
+      AWS_S3_URL: 'YourBucketRegion'
+      # Don't touch these, as this configures the bucket mapping inside the container.
+      AWS_S3_MOUNT: '/opt/s3fs/bucket'
+      # These arguments let the bucket remount without having issues with a non-empty directory
+      S3FS_ARGS: 'allow_other,nonempty'
+      S3FS_DEBUG: 0
+      # This gives the bucket user permission to read and write to where it needs to.
+      UID: 100
+      GID: 100
+
+
+networks:
+  # We are using the same network from our control center file for all external facing apps
+  # as well as an application specific internal network.
+  webstuff-external:
+    external: true
+  pleroma-internal:
+    internal: true
