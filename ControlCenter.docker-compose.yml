@@ -1,0 +1,115 @@
+# Control Center Docker Compose File
+
+
+# This instantiates two services across three containers:
+# Portainer (for web based administration of containers)
+# Nginx Proxy Manager and its database for routing traffic to
+# your containers.
+
+# We're going to use version 3.7 of compose. Why? I don't know.
+# It works and that's all I really ask of it, I guess you could
+# change the version but ask yourself: why? What drives me to 
+# to tamper with that which works? 
+version: '3.7'
+
+services:
+  # Nginx Proxy Manager is an easy to use web based tool to direct
+  # traffic to wherever we want it on our system. I use this because
+  # it's more user friendly (to dumb dumbs) than Traefik and I don't
+  # need a load balancer for what I do.
+  nginx-proxy-manager:
+    # This is the offical image.
+    image: 'jc21/nginx-proxy-manager:latest'
+    # If this turns off, all your services will become inaccessible
+    # by URL.
+    restart: unless-stopped
+    ports:
+      # These ports are in format <host-port>:<container-port>
+      # You will need to open up any host ports on your end,
+      # both in whatever software firewall your box is running
+      # and in any security groups your host may be applying to your
+      # VPS.
+      - '80:80' # Public HTTP Port
+      - '443:443' # Public HTTPS Port
+      - '81:81' # Admin Web Port
+      # Add any other Stream port you want to expose
+      # - '21:21' # FTP
+    environment:
+      # These are the login credentials for NPM's database
+      DB_MYSQL_HOST: "nginx-proxy-db"
+      DB_MYSQL_PORT: 3306 # Don't change this. This is the default port
+                          # and we don't want to have to coordinate this
+                          # with our MySQL container
+      DB_MYSQL_USER: "NPMUSERNAME" # Change this to something non-standard
+      DB_MYSQL_PASSWORD: "Password123" # Strong passwords are a good idea
+      DB_MYSQL_NAME: "npm" # Leave this be
+      # Uncomment this if IPv6 is not enabled on your host
+      # DISABLE_IPV6: 'true'
+    volumes:
+      # This is where anything stateful will persist even if the container
+      # is removed. I like to segregate out stateful from stateless as there
+      # is less of a chance to nuke out years of data on a bad git pull but
+      # that's me. This needs to be part of any backup strategy you have.
+      - /DirectoryOnTheHostMachine/npm:/data
+      - /DirectoryOnTheHostMachine/npm/letsencrypt:/etc/letsencrypt
+    depends_on:
+      - nginx-proxy-db
+    networks:
+      # We are giving NPM its own network to talk to it's DB on
+      - npm-internal
+      # We are also placing it on the outward facing network since it has a web app
+      - webstuff-external
+
+  # This is the container we're going to keep all of our precious proxy info in.
+  nginx-proxy-db:
+    image: 'jc21/mariadb-aria:latest'
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 'Password123' # Match this to the environment
+      MYSQL_DATABASE: 'npm'              # variables in the above section
+      MYSQL_USER: 'NPMUSERNAME'          # using the DB_MYSQL_PASSWORD value
+      MYSQL_PASSWORD: 'Password123'      # for both Root and User passwords
+    volumes:
+      # This is where you DB will live on the host machine for when you need to
+      # back it up, or should you want to browse it locally.
+      - /DirectoryOnTheHostMachine/npm/db/data/mysql:/var/lib/mysql
+    networks:
+       # There is no reason to ever have this DB externally facing, so we will only
+       # let it on NPM's internal network
+       - npm-internal
+
+  # Portainer is a web based container management  tool that allows you to start,
+  # stop, restart, check logs, or execute commands in your containers. This is
+  # some keys to the kingdom shit, so lock it down tight once you configure it through
+  # the web interface.
+  portainer:
+      image: portainer/portainer-ce:latest
+     # The web app listens on 9443, which is non-standard enough that you can just let
+     # it map directly to the host. Or you can change it. It doesn't know, it's a 
+     # computer program. It doesn't even feel pain when you turn it off. Regardless, 
+     # you will need to open whatever host port you use to the outside world.
+     # 
+     # Note: If you want console access, you will need to enable websockets for this in NPM,
+     # which will let you into your containers as the default user through any browser.
+     # 
+     # Additional note: The default user for most containers is root. As Mark Rebillet once 
+     # said: "Let me in I'm trynna fuck"
+     ports:
+      - '9443:9443'
+    # Because admin baby's gotta have it.  
+    restart: always
+    volumes:
+      # Don't touch this. This is what lets Portainer talk to Docker.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # This is where your personal data will live. Touch this to your heart's content.
+      - /DirectoryOnTheHostMachine/portainer/data:/data
+    networks:
+      - webstuff-external
+
+networks:
+  # Here we define our networks. We can use webstuff-external for 
+  webstuff-external:
+    name: webstuff-external
+  npm-internal:
+    name: npm-internal
+
